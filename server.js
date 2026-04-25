@@ -296,6 +296,32 @@ class YahooMailMCPServer {
                             type: 'object',
                             properties: {}
                         }
+                    },
+                    {
+                        name: 'draft_email',
+                        description: 'Draft a new email and save it to the Drafts folder. Does not send the email.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                to: {
+                                    type: 'string',
+                                    description: 'Recipient email address(es)'
+                                },
+                                subject: {
+                                    type: 'string',
+                                    description: 'Email subject'
+                                },
+                                text: {
+                                    type: 'string',
+                                    description: 'Plain text email body'
+                                },
+                                html: {
+                                    type: 'string',
+                                    description: 'Optional HTML email body'
+                                }
+                            },
+                            required: ['to', 'subject', 'text']
+                        }
                     }
                 ]
             };
@@ -346,6 +372,9 @@ class YahooMailMCPServer {
 
                     case 'list_folders':
                         return await this.listFolders();
+
+                    case 'draft_email':
+                        return await this.draftEmail(args.to, args.subject, args.text, args.html);
 
                     default:
                         throw new Error(`Unknown tool: ${name}`);
@@ -1215,6 +1244,72 @@ class YahooMailMCPServer {
         });
     }
 
+    /**
+     * Draft a new email and save it to the Drafts folder
+     */
+    async draftEmail(to, subject, text, html = null) {
+        if (!to || !subject || !text) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: 'Error: "to", "subject", and "text" are required to draft an email'
+                }]
+            };
+        }
+
+        const imap = await this.createImapConnection();
+
+        return new Promise((resolve, reject) => {
+            // Yahoo Mail's Drafts folder is typically named 'Draft'
+            const draftsFolder = 'Draft';
+            
+            // Construct RFC 822 message
+            const boundary = `----=_Part_${Date.now()}`;
+            let message = `From: ${process.env.YAHOO_EMAIL}\r\n`;
+            message += `To: ${to}\r\n`;
+            message += `Subject: ${subject}\r\n`;
+            message += `Date: ${new Date().toUTCString()}\r\n`;
+            message += 'MIME-Version: 1.0\r\n';
+
+            if (html) {
+                message += `Content-Type: multipart/alternative; boundary="${boundary}"\r\n\r\n`;
+                message += `--${boundary}\r\n`;
+                message += 'Content-Type: text/plain; charset=UTF-8\r\n\r\n';
+                message += `${text}\r\n\r\n`;
+                message += `--${boundary}\r\n`;
+                message += 'Content-Type: text/html; charset=UTF-8\r\n\r\n';
+                message += `${html}\r\n\r\n`;
+                message += `--${boundary}--\r\n`;
+            } else {
+                message += 'Content-Type: text/plain; charset=UTF-8\r\n\r\n';
+                message += `${text}\r\n`;
+            }
+
+            imap.append(message, { mailbox: draftsFolder, flags: ['\\Draft'] }, (appendErr) => {
+                imap.end();
+                if (appendErr) {
+                    reject(new Error(`Failed to save draft: ${appendErr.message}`));
+                    return;
+                }
+                
+                resolve({
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            success: true,
+                            message: `Email draft saved successfully to the ${draftsFolder} folder.`,
+                            draftDetails: {
+                                to,
+                                subject,
+                                textPreview: text.substring(0, 100) + (text.length > 100 ? '...' : '')
+                            }
+                        }, null, 2)
+                    }]
+                });
+            });
+        });
+    }
+
     setupErrorHandling() {
         this.server.onerror = (error) => {
             console.error('[MCP Error]', error);
@@ -1386,7 +1481,8 @@ class YahooMailMCPServer {
                     'mark_as_unread',
                     'flag_emails',
                     'unflag_emails',
-                    'move_emails'
+                    'move_emails',
+                    'draft_email'
                 ]
             });
         });
