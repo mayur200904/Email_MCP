@@ -1925,14 +1925,26 @@ class YahooMailMCPServer {
             };
         };
 
-        const sendAuthChallenge = (req, res, error, description, status = 401, resourcePath = null) => {
+        const sendAuthChallenge = (req, res, error, description, status = 401, resourcePath = null, scope = MCP_SCOPE) => {
+            const normalizedError = error === 'unauthorized' ? 'invalid_token' : error;
+            const headerParts = [
+                `Bearer realm="email-mcp"`,
+                `error="${normalizedError}"`,
+                `error_description="${String(description).replace(/"/g, '\\"')}"`,
+                `resource_metadata="${this.getProtectedResourceMetadataUrl(req, resourcePath)}"`,
+            ];
+
+            if (scope) {
+                headerParts.push(`scope="${scope}"`);
+            }
+
             res.setHeader(
                 'WWW-Authenticate',
-                `Bearer realm="email-mcp", resource_metadata="${this.getProtectedResourceMetadataUrl(req, resourcePath)}", scope="${MCP_SCOPE}"`
+                headerParts.join(', ')
             );
 
             return res.status(status).json({
-                error,
+                error: normalizedError,
                 error_description: description,
             });
         };
@@ -1952,7 +1964,7 @@ class YahooMailMCPServer {
 
             const authHeader = req.headers.authorization;
             if (!authHeader?.startsWith('Bearer ')) {
-                return sendAuthChallenge(req, res, 'unauthorized', 'Bearer access token required');
+                return sendAuthChallenge(req, res, 'invalid_token', 'Authentication required for this connector');
             }
 
             const accessToken = authHeader.slice(7);
