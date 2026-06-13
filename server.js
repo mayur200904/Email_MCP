@@ -15,7 +15,7 @@ import { simpleParser } from 'mailparser';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 // Load environment variables from .env file (for local development)
 dotenv.config();
@@ -37,9 +37,6 @@ class YahooMailMCPServer {
         this.transports = new Map();
         this.registeredClients = new Map();
         this.mcpAuthCodes = new Map();
-        this.mcpAccessTokens = new Map();
-        this.mcpRefreshTokens = new Map();
-        this.yahooSessions = new Map();
         this.stdioServer = null;
 
         process.on('SIGINT', async () => {
@@ -481,6 +478,101 @@ class YahooMailMCPServer {
         return process.env.MCP_STATE_SECRET || process.env.YAHOO_CLIENT_SECRET;
     }
 
+    getTokenEncryptionKey() {
+        return createHash('sha256').update(this.getMcpStateSecret()).digest();
+    }
+
+    sealToken(payload) {
+        const iv = randomBytes(12);
+        const cipher = createCipheriv('aes-256-gcm', this.getTokenEncryptionKey(), iv);
+        const encrypted = Buffer.concat([
+            cipher.update(JSON.stringify(payload), 'utf8'),
+            cipher.final(),
+        ]);
+        const tag = cipher.getAuthTag();
+        return `${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`;
+    }
+
+    unsealToken(token) {
+        if (!token || typeof token !== 'string') {
+            return null;
+        }
+
+        const parts = token.split('.');
+        if (parts.length !== 3) {
+            return null;
+        }
+
+        try {
+            const [ivPart, tagPart, encryptedPart] = parts;
+            const decipher = createDecipheriv(
+                'aes-256-gcm',
+                this.getTokenEncryptionKey(),
+                Buffer.from(ivPart, 'base64url')
+            );
+            decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+
+            const decrypted = Buffer.concat([
+                decipher.update(Buffer.from(encryptedPart, 'base64url')),
+                decipher.final(),
+            ]);
+
+            return JSON.parse(decrypted.toString('utf8'));
+        } catch {
+            return null;
+        }
+    }
+
+    createSealedAccessToken({ clientId, yahooSession, scope = MCP_SCOPE }) {
+        const now = Date.now();
+        const expiresAt = Math.min(
+            yahooSession.accessTokenExpiresAt,
+            now + (55 * 60 * 1000)
+        );
+
+        return {
+            access_token: this.sealToken({
+                tokenType: 'mcp_access',
+                clientId,
+                scope,
+                yahooSession,
+                createdAt: now,
+                expiresAt,
+            }),
+            token_type: 'Bearer',
+            expires_in: Math.max(60, Math.floor((expiresAt - now) / 1000)),
+            scope,
+        };
+    }
+
+    parseSealedAccessToken(token) {
+        const payload = this.unsealToken(token);
+        if (!payload || payload.tokenType !== 'mcp_access') {
+            return null;
+        }
+        return payload;
+    }
+
+    createSealedRefreshToken({ clientId, yahooSession, scope = MCP_SCOPE }) {
+        const now = Date.now();
+        return this.sealToken({
+            tokenType: 'mcp_refresh',
+            clientId,
+            scope,
+            yahooSession,
+            createdAt: now,
+            expiresAt: now + (30 * 24 * 60 * 60 * 1000),
+        });
+    }
+
+    parseSealedRefreshToken(token) {
+        const payload = this.unsealToken(token);
+        if (!payload || payload.tokenType !== 'mcp_refresh') {
+            return null;
+        }
+        return payload;
+    }
+
     createYahooAuthorizationState(payload) {
         const encodedPayload = Buffer.from(
             JSON.stringify({
@@ -735,9 +827,7 @@ class YahooMailMCPServer {
             throw new Error('Yahoo did not return an email address. Enable the Yahoo OpenID "Email" permission for your app.');
         }
 
-        const yahooSessionId = this.generateOpaqueToken('yahoo_session');
-        const session = {
-            yahooSessionId,
+        return {
             email,
             accessToken: tokenResponse.access_token,
             refreshToken: tokenResponse.refresh_token,
@@ -748,13 +838,9 @@ class YahooMailMCPServer {
             createdAt: Date.now(),
             updatedAt: Date.now(),
         };
-
-        this.yahooSessions.set(yahooSessionId, session);
-        return session;
     }
 
-    async ensureYahooSession(yahooSessionId) {
-        const session = this.yahooSessions.get(yahooSessionId);
+    async ensureYahooSession(session) {
         if (!session) {
             throw new Error('Yahoo session not found. Please reconnect the Claude connector.');
         }
@@ -781,41 +867,23 @@ class YahooMailMCPServer {
             email: refreshedClaims?.email || session.email,
         };
 
-        this.yahooSessions.set(yahooSessionId, updatedSession);
         return updatedSession;
     }
 
-    issueMcpTokens({ clientId, yahooSessionId, scope = MCP_SCOPE, rotateRefreshToken = null }) {
-        const accessToken = this.generateOpaqueToken('mcp_at');
-        const refreshToken = this.generateOpaqueToken('mcp_rt');
-        const expiresIn = 3600;
-
-        this.mcpAccessTokens.set(accessToken, {
+    issueMcpTokens({ clientId, yahooSession, scope = MCP_SCOPE }) {
+        const accessTokenResponse = this.createSealedAccessToken({
             clientId,
-            yahooSessionId,
+            yahooSession,
             scope,
-            expiresAt: Date.now() + (expiresIn * 1000),
-            createdAt: Date.now(),
-        });
-
-        if (rotateRefreshToken) {
-            this.mcpRefreshTokens.delete(rotateRefreshToken);
-        }
-
-        this.mcpRefreshTokens.set(refreshToken, {
-            clientId,
-            yahooSessionId,
-            scope,
-            expiresAt: Date.now() + (30 * 24 * 60 * 60 * 1000),
-            createdAt: Date.now(),
         });
 
         return {
-            access_token: accessToken,
-            token_type: 'Bearer',
-            expires_in: expiresIn,
-            refresh_token: refreshToken,
-            scope,
+            ...accessTokenResponse,
+            refresh_token: this.createSealedRefreshToken({
+                clientId,
+                yahooSession,
+                scope,
+            }),
         };
     }
 
@@ -823,11 +891,10 @@ class YahooMailMCPServer {
         const effectiveAuthContext = authContext || this.getLocalAuthContext();
 
         if (effectiveAuthContext.mode === 'oauth') {
-            const session = await this.ensureYahooSession(effectiveAuthContext.yahooSessionId);
             return {
                 mode: 'oauth',
-                email: session.email,
-                accessToken: session.accessToken,
+                email: effectiveAuthContext.yahooSession.email,
+                accessToken: effectiveAuthContext.yahooSession.accessToken,
             };
         }
 
@@ -1889,24 +1956,23 @@ class YahooMailMCPServer {
             }
 
             const accessToken = authHeader.slice(7);
-            const tokenRecord = this.mcpAccessTokens.get(accessToken);
+            const tokenRecord = this.parseSealedAccessToken(accessToken);
             if (!tokenRecord) {
                 return sendAuthChallenge(req, res, 'invalid_token', 'The MCP access token is invalid');
             }
 
             if (tokenRecord.expiresAt <= Date.now()) {
-                this.mcpAccessTokens.delete(accessToken);
                 return sendAuthChallenge(req, res, 'invalid_token', 'The MCP access token has expired');
             }
 
-            const yahooSession = this.yahooSessions.get(tokenRecord.yahooSessionId);
+            const yahooSession = tokenRecord.yahooSession;
             if (!yahooSession) {
                 return sendAuthChallenge(req, res, 'invalid_token', 'The Yahoo authorization session no longer exists');
             }
 
             req.authContext = {
                 mode: 'oauth',
-                yahooSessionId: tokenRecord.yahooSessionId,
+                yahooSession,
                 email: yahooSession.email,
             };
 
@@ -2109,7 +2175,7 @@ class YahooMailMCPServer {
                     codeChallenge: pendingAuthorization.codeChallenge,
                     codeChallengeMethod: pendingAuthorization.codeChallengeMethod,
                     scope: pendingAuthorization.scope || MCP_SCOPE,
-                    yahooSessionId: yahooSession.yahooSessionId,
+                    yahooSession,
                     createdAt: Date.now(),
                 });
 
@@ -2204,13 +2270,13 @@ class YahooMailMCPServer {
                 this.mcpAuthCodes.delete(body.code);
                 return res.json(this.issueMcpTokens({
                     clientId: authCode.clientId,
-                    yahooSessionId: authCode.yahooSessionId,
+                    yahooSession: authCode.yahooSession,
                     scope: authCode.scope || MCP_SCOPE,
                 }));
             }
 
             if (grantType === 'refresh_token') {
-                const refreshRecord = this.mcpRefreshTokens.get(body.refresh_token);
+                const refreshRecord = this.parseSealedRefreshToken(body.refresh_token);
                 if (!refreshRecord) {
                     return res.status(400).json({
                         error: 'invalid_grant',
@@ -2219,7 +2285,6 @@ class YahooMailMCPServer {
                 }
 
                 if (refreshRecord.expiresAt <= Date.now()) {
-                    this.mcpRefreshTokens.delete(body.refresh_token);
                     return res.status(400).json({
                         error: 'invalid_grant',
                         error_description: 'Refresh token has expired',
@@ -2245,8 +2310,9 @@ class YahooMailMCPServer {
                     }
                 }
 
+                let yahooSession;
                 try {
-                    await this.ensureYahooSession(refreshRecord.yahooSessionId);
+                    yahooSession = await this.ensureYahooSession(refreshRecord.yahooSession);
                 } catch (refreshError) {
                     return res.status(400).json({
                         error: 'invalid_grant',
@@ -2256,9 +2322,8 @@ class YahooMailMCPServer {
 
                 return res.json(this.issueMcpTokens({
                     clientId: refreshRecord.clientId,
-                    yahooSessionId: refreshRecord.yahooSessionId,
+                    yahooSession,
                     scope: refreshRecord.scope || MCP_SCOPE,
-                    rotateRefreshToken: body.refresh_token,
                 }));
             }
 
@@ -2304,8 +2369,8 @@ class YahooMailMCPServer {
 
                         if (
                             req.authContext?.mode === 'oauth' &&
-                            transportEntry.yahooSessionId &&
-                            transportEntry.yahooSessionId !== req.authContext.yahooSessionId
+                            transportEntry.yahooEmail &&
+                            transportEntry.yahooEmail !== req.authContext.email
                         ) {
                             return sendAuthChallenge(req, res, 'invalid_token', 'The access token does not match this MCP session', 401, '/mcp');
                         }
@@ -2317,7 +2382,7 @@ class YahooMailMCPServer {
                                 this.transports.set(initializedSessionId, {
                                     transport,
                                     server,
-                                    yahooSessionId: req.authContext?.yahooSessionId || null,
+                                    yahooEmail: req.authContext?.email || null,
                                 });
                             },
                         });
@@ -2336,7 +2401,7 @@ class YahooMailMCPServer {
                         transportEntry = {
                             transport,
                             server,
-                            yahooSessionId: req.authContext?.yahooSessionId || null,
+                            yahooEmail: req.authContext?.email || null,
                         };
                     } else {
                         return res.status(400).json({
@@ -2381,7 +2446,7 @@ class YahooMailMCPServer {
                 this.transports.set(sessionId, {
                     transport,
                     server,
-                    yahooSessionId: req.authContext?.yahooSessionId || null,
+                    yahooEmail: req.authContext?.email || null,
                 });
 
                 transport.onclose = async () => {
@@ -2416,8 +2481,8 @@ class YahooMailMCPServer {
                 console.error('[SSE] Routing message to transport:', sessionId);
                 if (
                     req.authContext?.mode === 'oauth' &&
-                    transportEntry.yahooSessionId &&
-                    transportEntry.yahooSessionId !== req.authContext.yahooSessionId
+                    transportEntry.yahooEmail &&
+                    transportEntry.yahooEmail !== req.authContext.email
                 ) {
                     return sendAuthChallenge(req, res, 'invalid_token', 'The access token does not match this SSE session');
                 }
