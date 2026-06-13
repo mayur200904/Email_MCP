@@ -447,7 +447,7 @@ class YahooMailMCPServer {
     }
 
     getYahooScopes() {
-        return process.env.YAHOO_SCOPES || 'openid email';
+        return process.env.YAHOO_SCOPES || 'openid mail-r mail-w';
     }
 
     getExternalBaseUrl(req) {
@@ -870,6 +870,25 @@ class YahooMailMCPServer {
         return updatedSession;
     }
 
+    async validateYahooMailboxAccess(session) {
+        const imap = await this.createImapConnection({
+            mode: 'oauth',
+            yahooSession: session,
+            email: session.email,
+        });
+
+        return await new Promise((resolve, reject) => {
+            imap.openBox('INBOX', true, (err) => {
+                imap.end();
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                resolve(true);
+            });
+        });
+    }
+
     issueMcpTokens({ clientId, yahooSession, scope = MCP_SCOPE }) {
         const accessTokenResponse = this.createSealedAccessToken({
             clientId,
@@ -965,7 +984,7 @@ class YahooMailMCPServer {
                     err.message.includes('authentication failed') ||
                     err.message.includes('AUTHENTICATIONFAILED')) {
                     errorMessage = credentials.mode === 'oauth'
-                        ? `Yahoo OAuth authentication failed: ${err.message}. Please reconnect the Claude connector so Yahoo access can be granted again.`
+                        ? `Yahoo mailbox OAuth failed: ${err.message}. This usually means the Yahoo app does not have Mail scopes/approval for IMAP access. Confirm your Yahoo app has mail access permissions (for example mail-r and mail-w) and any required Yahoo developer approval, then reconnect the Claude connector.`
                         : `Authentication failed: ${err.message}. Please check Yahoo Mail app password. Regenerate at https://login.yahoo.com/account/security`;
                 } else if (err.message.includes('ENOTFOUND') ||
                            err.message.includes('ECONNREFUSED') ||
@@ -1982,14 +2001,33 @@ class YahooMailMCPServer {
                 return sendAuthChallenge(req, res, 'invalid_token', 'The Yahoo authorization session no longer exists');
             }
 
-            req.authContext = {
-                mode: 'oauth',
-                yahooSession,
-                email: yahooSession.email,
+            const continueWithSession = async (validatedSession) => {
+                req.authContext = {
+                    mode: 'oauth',
+                    yahooSession: validatedSession,
+                    email: validatedSession.email,
+                };
+
+                req.mcpToken = tokenRecord;
+                next();
             };
 
-            req.mcpToken = tokenRecord;
-            next();
+            this.ensureYahooSession(yahooSession)
+                .then(async (refreshedSession) => {
+                    if (req.method === 'POST') {
+                        await this.validateYahooMailboxAccess(refreshedSession);
+                    }
+                    await continueWithSession(refreshedSession);
+                })
+                .catch((error) => {
+                    console.error('[OAuth] Rejecting cached connector session:', error.message);
+                    return sendAuthChallenge(
+                        req,
+                        res,
+                        'invalid_token',
+                        'Yahoo mailbox access is not currently valid for this connector. Please reconnect and approve mail access.'
+                    );
+                });
         };
 
         app.get('/health', (req, res) => {
@@ -2179,6 +2217,7 @@ class YahooMailMCPServer {
                     pendingAuthorization.yahooCallbackUrl,
                     pendingAuthorization.nonce
                 );
+                await this.validateYahooMailboxAccess(yahooSession);
 
                 const mcpAuthorizationCode = this.generateOpaqueToken('mcp_code');
                 this.mcpAuthCodes.set(mcpAuthorizationCode, {
