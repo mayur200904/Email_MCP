@@ -4,11 +4,11 @@
 version: '3.8'
 
 services:
-  yahoo-mail-mcp:
+  email-mcp:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: yahoo-mail-mcp-server
+    container_name: email-mcp-connector
     ports:
       - "3000:3000"
     environment:

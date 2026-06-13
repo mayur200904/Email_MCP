@@ -1,5 +1,5 @@
 {
-  "name": "yahoo-mail-mcp",
+  "name": "email-mcp",
   "version": "4.0.0",
   "description": "Yahoo Mail MCP Server - Full email management via IMAP",
   "type": "module",
@@ -9,8 +9,8 @@
     "start:stdio": "cross-env TRANSPORT_MODE=stdio node server.js",
     "start:sse": "cross-env TRANSPORT_MODE=sse PORT=3000 node server.js",
     "dev": "cross-env TRANSPORT_MODE=sse PORT=3000 nodemon server.js",
-    "docker:build": "docker build -t yahoo-mail-mcp .",
-    "docker:run": "docker run -p 3000:3000 --env-file .env yahoo-mail-mcp",
+    "docker:build": "docker build -t email-mcp .",
+    "docker:run": "docker run -p 3000:3000 --env-file .env email-mcp",
     "docker:compose:up": "docker-compose up --build",
     "docker:compose:down": "docker-compose down",
     "docker:compose:logs": "docker-compose logs -f",
@@ -19,7 +19,7 @@
   },
   "keywords": [
     "mcp",
-    "yahoo-mail",
+    "mail-connector",
     "imap",
     "email",
     "model-context-protocol"

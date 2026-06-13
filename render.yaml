@@ -4,7 +4,7 @@
 services:
   # Web service for the Yahoo Mail MCP Server
   - type: web
-    name: yahoo-mail-mcp-server
+    name: email-mcp-connector
     runtime: docker
     plan: free  # Starter is better if you want to avoid sleep/wake delays
     region: oregon  # Choose: oregon, frankfurt, singapore, ohio
@@ -24,7 +24,7 @@ services:
       - key: PORT
         fromService:
           type: web
-          name: yahoo-mail-mcp-server
+          name: email-mcp-connector
           property: port
       - key: YAHOO_CLIENT_ID
         sync: false

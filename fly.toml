@@ -1,7 +1,7 @@
 # Fly.io configuration for Yahoo Mail MCP Server
 # Docs: https://fly.io/docs/reference/configuration/
 
-app = 'yahoo-mail-mcp-server'
+app = 'email-mcp-connector'
 primary_region = 'bom'  # Mumbai, India (closest to your team)
 
 [build]

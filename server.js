@@ -20,7 +20,7 @@ import { createHash, randomBytes } from 'crypto';
 dotenv.config();
 
 const MCP_SERVER_INFO = {
-    name: 'yahoo-mail-mcp',
+    name: 'email-mcp',
     version: '4.0.0',
 };
 
@@ -1804,7 +1804,7 @@ class YahooMailMCPServer {
         const sendAuthChallenge = (req, res, error, description, status = 401) => {
             res.setHeader(
                 'WWW-Authenticate',
-                `Bearer realm="yahoo-mail-mcp", resource_metadata="${this.getProtectedResourceMetadataUrl(req)}", scope="${MCP_SCOPE}"`
+                `Bearer realm="email-mcp", resource_metadata="${this.getProtectedResourceMetadataUrl(req)}", scope="${MCP_SCOPE}"`
             );
 
             return res.status(status).json({
