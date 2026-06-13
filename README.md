@@ -83,7 +83,7 @@ Recommended permissions:
 Default requested scopes in this server:
 
 ```env
-YAHOO_SCOPES="openid email mail-r mail-w"
+YAHOO_SCOPES="openid email"
 ```
 
 If Yahoo requires approval for restricted mail scopes on your app, complete that in Yahoo Developer first.
@@ -110,7 +110,7 @@ PORT=3000
 
 YAHOO_CLIENT_ID=your-yahoo-client-id
 YAHOO_CLIENT_SECRET=your-yahoo-client-secret
-YAHOO_SCOPES=openid email mail-r mail-w
+YAHOO_SCOPES=openid email
 
 # Optional but recommended behind proxies/platforms
 PUBLIC_BASE_URL=https://your-domain.com
@@ -156,7 +156,7 @@ TRANSPORT_MODE=sse
 PUBLIC_BASE_URL=https://your-render-service.onrender.com
 YAHOO_CLIENT_ID=...
 YAHOO_CLIENT_SECRET=...
-YAHOO_SCOPES=openid email mail-r mail-w
+YAHOO_SCOPES=openid email
 ```
 
 3. Add the remote MCP URL in Claude

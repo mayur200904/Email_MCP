@@ -31,7 +31,7 @@ services:
       - key: YAHOO_CLIENT_SECRET
         sync: false
       - key: YAHOO_SCOPES
-        value: openid email mail-r mail-w
+        value: openid email
 
     # Health check configuration
     healthCheckPath: /health

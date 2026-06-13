@@ -450,7 +450,7 @@ class YahooMailMCPServer {
     }
 
     getYahooScopes() {
-        return process.env.YAHOO_SCOPES || 'openid email mail-r mail-w';
+        return process.env.YAHOO_SCOPES || 'openid email';
     }
 
     getExternalBaseUrl(req) {

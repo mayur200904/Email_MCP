@@ -10,7 +10,7 @@ primary_region = 'bom'  # Mumbai, India (closest to your team)
 [env]
   TRANSPORT_MODE = 'sse'
   NODE_ENV = 'production'
-  YAHOO_SCOPES = 'openid email mail-r mail-w'
+  YAHOO_SCOPES = 'openid email'
 
 [http_service]
   internal_port = 3000
