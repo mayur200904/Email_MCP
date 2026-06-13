@@ -6,7 +6,7 @@ services:
   - type: web
     name: yahoo-mail-mcp-server
     runtime: docker
-    plan: free  # Change to 'starter' or higher for production use
+    plan: free  # Starter is better if you want to avoid sleep/wake delays
     region: oregon  # Choose: oregon, frankfurt, singapore, ohio
 
     # Build configuration
@@ -19,15 +19,19 @@ services:
         value: production
       - key: TRANSPORT_MODE
         value: sse
+      - key: PUBLIC_BASE_URL
+        sync: false
       - key: PORT
         fromService:
           type: web
           name: yahoo-mail-mcp-server
           property: port
-      - key: YAHOO_EMAIL
-        sync: false  # Set this in Render Dashboard (Settings > Environment)
-      - key: YAHOO_APP_PASSWORD
-        sync: false  # Set this in Render Dashboard (Settings > Environment)
+      - key: YAHOO_CLIENT_ID
+        sync: false
+      - key: YAHOO_CLIENT_SECRET
+        sync: false
+      - key: YAHOO_SCOPES
+        value: openid email mail-r mail-w
 
     # Health check configuration
     healthCheckPath: /health

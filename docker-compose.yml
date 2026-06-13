@@ -15,6 +15,10 @@ services:
       - NODE_ENV=development
       - TRANSPORT_MODE=sse
       - PORT=3000
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:3000}
+      - YAHOO_CLIENT_ID=${YAHOO_CLIENT_ID}
+      - YAHOO_CLIENT_SECRET=${YAHOO_CLIENT_SECRET}
+      - YAHOO_SCOPES=${YAHOO_SCOPES:-openid email mail-r mail-w}
       - YAHOO_EMAIL=${YAHOO_EMAIL}
       - YAHOO_APP_PASSWORD=${YAHOO_APP_PASSWORD}
     env_file:

@@ -1,7 +1,7 @@
 # Fly.io configuration for Yahoo Mail MCP Server
 # Docs: https://fly.io/docs/reference/configuration/
 
-app = 'outlook-mcp'
+app = 'yahoo-mail-mcp-server'
 primary_region = 'bom'  # Mumbai, India (closest to your team)
 
 [build]
@@ -10,6 +10,7 @@ primary_region = 'bom'  # Mumbai, India (closest to your team)
 [env]
   TRANSPORT_MODE = 'sse'
   NODE_ENV = 'production'
+  YAHOO_SCOPES = 'openid email mail-r mail-w'
 
 [http_service]
   internal_port = 3000
