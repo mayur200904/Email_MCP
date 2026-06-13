@@ -640,6 +640,7 @@ class YahooMailMCPServer {
             client_id: client.clientId,
             client_secret: client.clientSecret || undefined,
             client_id_issued_at: Math.floor(client.createdAt / 1000),
+            client_secret_expires_at: client.clientSecret ? 0 : undefined,
             token_endpoint_auth_method: client.tokenEndpointAuthMethod,
             grant_types: client.grantTypes,
             response_types: client.responseTypes,
@@ -1812,7 +1813,7 @@ class YahooMailMCPServer {
                 return next();
             }
 
-            if (req.path === '/oauth/token') {
+            if (req.path === '/oauth/token' || req.path === '/token') {
                 express.json()(req, res, (jsonErr) => {
                     if (jsonErr) {
                         return next(jsonErr);
@@ -1977,6 +1978,7 @@ class YahooMailMCPServer {
                 const redirectUris = Array.isArray(req.body?.redirect_uris) ? req.body.redirect_uris : [];
                 const tokenEndpointAuthMethod = req.body?.token_endpoint_auth_method || 'none';
                 const client = this.registerClient({
+                    clientId: req.body?.client_id,
                     redirectUris,
                     tokenEndpointAuthMethod,
                 });
@@ -1990,7 +1992,7 @@ class YahooMailMCPServer {
             }
         });
 
-        app.get('/oauth/authorize', (req, res) => {
+        const handleAuthorize = (req, res) => {
             if (!this.isMcpAuthorizationEnabled()) {
                 return res.status(404).json({ error: 'not_enabled', error_description: 'MCP OAuth is not enabled on this server.' });
             }
@@ -2053,7 +2055,10 @@ class YahooMailMCPServer {
             }
 
             res.redirect(yahooAuthorizeUrl.toString());
-        });
+        };
+
+        app.get('/oauth/authorize', handleAuthorize);
+        app.get('/authorize', handleAuthorize);
 
         app.get('/oauth/callback', async (req, res) => {
             const { code, state, error, error_description } = req.query;
@@ -2119,7 +2124,7 @@ class YahooMailMCPServer {
             }
         });
 
-        app.post('/oauth/token', async (req, res) => {
+        const handleToken = async (req, res) => {
             if (!this.isMcpAuthorizationEnabled()) {
                 return res.status(404).json({ error: 'not_enabled', error_description: 'MCP OAuth is not enabled on this server.' });
             }
@@ -2251,7 +2256,10 @@ class YahooMailMCPServer {
                 error: 'unsupported_grant_type',
                 error_description: 'Supported grant types: authorization_code, refresh_token',
             });
-        });
+        };
+
+        app.post('/oauth/token', handleToken);
+        app.post('/token', handleToken);
 
         app.get('/mcp/sse', async (req, res) => {
             authenticateMcpRequest(req, res, async () => {
