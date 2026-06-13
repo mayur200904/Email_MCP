@@ -14,7 +14,7 @@ import { simpleParser } from 'mailparser';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 // Load environment variables from .env file (for local development)
 dotenv.config();
@@ -35,7 +35,6 @@ class YahooMailMCPServer {
     constructor() {
         this.transports = new Map();
         this.registeredClients = new Map();
-        this.pendingYahooAuthorizations = new Map();
         this.mcpAuthCodes = new Map();
         this.mcpAccessTokens = new Map();
         this.mcpRefreshTokens = new Map();
@@ -474,6 +473,61 @@ class YahooMailMCPServer {
 
     generateOpaqueToken(prefix = 'tok') {
         return `${prefix}_${randomBytes(24).toString('base64url')}`;
+    }
+
+    getMcpStateSecret() {
+        return process.env.MCP_STATE_SECRET || process.env.YAHOO_CLIENT_SECRET;
+    }
+
+    createYahooAuthorizationState(payload) {
+        const encodedPayload = Buffer.from(
+            JSON.stringify({
+                ...payload,
+                createdAt: Date.now(),
+            })
+        ).toString('base64url');
+
+        const signature = createHmac('sha256', this.getMcpStateSecret())
+            .update(encodedPayload)
+            .digest('base64url');
+
+        return `${encodedPayload}.${signature}`;
+    }
+
+    parseYahooAuthorizationState(stateToken) {
+        if (!stateToken || typeof stateToken !== 'string') {
+            return null;
+        }
+
+        const parts = stateToken.split('.');
+        if (parts.length !== 2) {
+            return null;
+        }
+
+        const [encodedPayload, signature] = parts;
+
+        try {
+            const providedSignature = Buffer.from(signature, 'base64url');
+            const expectedSignature = createHmac('sha256', this.getMcpStateSecret())
+                .update(encodedPayload)
+                .digest();
+
+            if (
+                providedSignature.length !== expectedSignature.length ||
+                !timingSafeEqual(providedSignature, expectedSignature)
+            ) {
+                return null;
+            }
+
+            const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+            if (!payload?.createdAt || (Date.now() - payload.createdAt) > (15 * 60 * 1000)) {
+                return null;
+            }
+
+            return payload;
+        } catch {
+            return null;
+        }
     }
 
     parseBasicAuthCredentials(authHeader) {
@@ -1971,11 +2025,10 @@ class YahooMailMCPServer {
                 return res.status(400).send(error.message);
             }
 
-            const authorizationId = this.generateOpaqueToken('yahoo_auth');
             const nonce = this.generateOpaqueToken('nonce');
             const yahooCallbackUrl = this.getYahooCallbackUrl(req);
 
-            this.pendingYahooAuthorizations.set(authorizationId, {
+            const authorizationState = this.createYahooAuthorizationState({
                 clientId: client.clientId,
                 redirectUri: redirect_uri,
                 clientState: state,
@@ -1984,7 +2037,6 @@ class YahooMailMCPServer {
                 scope: scope || MCP_SCOPE,
                 nonce,
                 yahooCallbackUrl,
-                createdAt: Date.now(),
             });
 
             const yahooAuthorizeUrl = new URL(YAHOO_AUTH_ENDPOINT);
@@ -1992,7 +2044,7 @@ class YahooMailMCPServer {
             yahooAuthorizeUrl.searchParams.set('redirect_uri', yahooCallbackUrl);
             yahooAuthorizeUrl.searchParams.set('response_type', 'code');
             yahooAuthorizeUrl.searchParams.set('scope', this.getYahooScopes());
-            yahooAuthorizeUrl.searchParams.set('state', authorizationId);
+            yahooAuthorizeUrl.searchParams.set('state', authorizationState);
             yahooAuthorizeUrl.searchParams.set('nonce', nonce);
             yahooAuthorizeUrl.searchParams.set('language', 'en-us');
 
@@ -2005,11 +2057,10 @@ class YahooMailMCPServer {
 
         app.get('/oauth/callback', async (req, res) => {
             const { code, state, error, error_description } = req.query;
-            const pendingAuthorization = state ? this.pendingYahooAuthorizations.get(state) : null;
+            const pendingAuthorization = this.parseYahooAuthorizationState(state);
 
             if (error) {
                 if (pendingAuthorization) {
-                    this.pendingYahooAuthorizations.delete(state);
                     const redirectUrl = new URL(pendingAuthorization.redirectUri);
                     redirectUrl.searchParams.set('error', error);
                     if (error_description) {
@@ -2025,10 +2076,8 @@ class YahooMailMCPServer {
             }
 
             if (!pendingAuthorization) {
-                return res.status(400).send('Authorization session not found or already used.');
+                return res.status(400).send('Authorization session is invalid or expired. Please retry connecting from Claude.');
             }
-
-            this.pendingYahooAuthorizations.delete(state);
 
             try {
                 const tokenResponse = await this.exchangeYahooAuthorizationCode(code, pendingAuthorization.yahooCallbackUrl);
