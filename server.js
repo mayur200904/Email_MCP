@@ -8,7 +8,8 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { CallToolRequestSchema, ListToolsRequestSchema, isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
 import express from 'express';
@@ -467,8 +468,9 @@ class YahooMailMCPServer {
         return `${this.getExternalBaseUrl(req)}/oauth/callback`;
     }
 
-    getProtectedResourceMetadataUrl(req) {
-        return `${this.getExternalBaseUrl(req)}/.well-known/oauth-protected-resource/mcp/sse`;
+    getProtectedResourceMetadataUrl(req, resourcePath = null) {
+        const resolvedPath = resourcePath || (req.path === '/mcp' ? '/mcp' : '/mcp/sse');
+        return `${this.getExternalBaseUrl(req)}/.well-known/oauth-protected-resource${resolvedPath}`;
     }
 
     generateOpaqueToken(prefix = 'tok') {
@@ -1856,10 +1858,10 @@ class YahooMailMCPServer {
             };
         };
 
-        const sendAuthChallenge = (req, res, error, description, status = 401) => {
+        const sendAuthChallenge = (req, res, error, description, status = 401, resourcePath = null) => {
             res.setHeader(
                 'WWW-Authenticate',
-                `Bearer realm="email-mcp", resource_metadata="${this.getProtectedResourceMetadataUrl(req)}", scope="${MCP_SCOPE}"`
+                `Bearer realm="email-mcp", resource_metadata="${this.getProtectedResourceMetadataUrl(req, resourcePath)}", scope="${MCP_SCOPE}"`
             );
 
             return res.status(status).json({
@@ -1967,6 +1969,14 @@ class YahooMailMCPServer {
             }
 
             res.json(getProtectedResourceMetadata(req, '/mcp/sse'));
+        });
+
+        app.get('/.well-known/oauth-protected-resource/mcp', (req, res) => {
+            if (!this.isMcpAuthorizationEnabled()) {
+                return res.status(404).json({ error: 'not_enabled', error_description: 'MCP OAuth is not enabled on this server.' });
+            }
+
+            res.json(getProtectedResourceMetadata(req, '/mcp'));
         });
 
         app.post('/register', (req, res) => {
@@ -2261,6 +2271,101 @@ class YahooMailMCPServer {
         app.post('/oauth/token', handleToken);
         app.post('/token', handleToken);
 
+        app.all('/mcp', async (req, res) => {
+            authenticateMcpRequest(req, res, async () => {
+                try {
+                    const sessionIdHeader = req.headers['mcp-session-id'];
+                    const sessionId = Array.isArray(sessionIdHeader) ? sessionIdHeader[0] : sessionIdHeader;
+                    let transportEntry = null;
+
+                    if (sessionId) {
+                        transportEntry = this.transports.get(sessionId) || null;
+                        if (!transportEntry) {
+                            return res.status(400).json({
+                                jsonrpc: '2.0',
+                                error: {
+                                    code: -32000,
+                                    message: 'Bad Request: No valid session ID provided',
+                                },
+                                id: null,
+                            });
+                        }
+
+                        if (!(transportEntry.transport instanceof StreamableHTTPServerTransport)) {
+                            return res.status(400).json({
+                                jsonrpc: '2.0',
+                                error: {
+                                    code: -32000,
+                                    message: 'Bad Request: Session exists but uses a different transport protocol',
+                                },
+                                id: null,
+                            });
+                        }
+
+                        if (
+                            req.authContext?.mode === 'oauth' &&
+                            transportEntry.yahooSessionId &&
+                            transportEntry.yahooSessionId !== req.authContext.yahooSessionId
+                        ) {
+                            return sendAuthChallenge(req, res, 'invalid_token', 'The access token does not match this MCP session', 401, '/mcp');
+                        }
+                    } else if (req.method === 'POST' && isInitializeRequest(req.body)) {
+                        const server = this.createMcpServer(req.authContext);
+                        const transport = new StreamableHTTPServerTransport({
+                            sessionIdGenerator: () => this.generateOpaqueToken('mcp_session'),
+                            onsessioninitialized: (initializedSessionId) => {
+                                this.transports.set(initializedSessionId, {
+                                    transport,
+                                    server,
+                                    yahooSessionId: req.authContext?.yahooSessionId || null,
+                                });
+                            },
+                        });
+
+                        transport.onclose = async () => {
+                            const activeSessionId = transport.sessionId;
+                            if (server?.close) {
+                                await server.close();
+                            }
+                            if (activeSessionId) {
+                                this.transports.delete(activeSessionId);
+                            }
+                        };
+
+                        await server.connect(transport);
+                        transportEntry = {
+                            transport,
+                            server,
+                            yahooSessionId: req.authContext?.yahooSessionId || null,
+                        };
+                    } else {
+                        return res.status(400).json({
+                            jsonrpc: '2.0',
+                            error: {
+                                code: -32000,
+                                message: 'Bad Request: No valid session ID provided',
+                            },
+                            id: null,
+                        });
+                    }
+
+                    await transportEntry.transport.handleRequest(req, res, req.body);
+                } catch (error) {
+                    console.error('[MCP HTTP] Error handling request:', error);
+                    if (!res.headersSent) {
+                        res.status(500).json({
+                            jsonrpc: '2.0',
+                            error: {
+                                code: -32603,
+                                message: 'Internal server error',
+                            },
+                            id: null,
+                        });
+                    }
+                }
+            });
+        });
+
         app.get('/mcp/sse', async (req, res) => {
             authenticateMcpRequest(req, res, async () => {
             try {
@@ -2348,6 +2453,7 @@ class YahooMailMCPServer {
                     : 'MCP server for Yahoo Mail using app-password IMAP authentication',
                 endpoints: {
                     health: '/health',
+                    mcp: '/mcp',
                     sse: '/mcp/sse',
                     message: '/mcp/message',
                     authorize: '/oauth/authorize',
