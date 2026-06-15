@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= title %></title>
+  <link rel="stylesheet" href="/styles/wovv.css" />
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero-card">
+      <div class="brand-kicker">WovV Tech Internal Connector</div>
+      <h1>Connect Yahoo Mail</h1>
+      <p class="hero-copy">Use your Yahoo email and Yahoo app password once. We verify it live, store it securely, and use it only for your Claude mailbox actions.</p>
+    </section>
+
+    <% if (successMessage) { %>
+      <section class="notice success"><%= successMessage %></section>
+    <% } %>
+    <% if (disconnectedMessage) { %>
+      <section class="notice neutral"><%= disconnectedMessage %></section>
+    <% } %>
+    <% if (errorMessage) { %>
+      <section class="notice error"><%= errorMessage %></section>
+    <% } %>
+
+    <section class="content-grid">
+      <div class="panel">
+        <h2>Yahoo setup</h2>
+        <p class="muted">We do not ask for your normal Yahoo password. Please create and paste a Yahoo app password.</p>
+        <form method="post" action="/setup/connect" class="setup-form">
+          <input type="hidden" name="setupState" value="<%= setupState || '' %>" />
+          <label>
+            <span>Yahoo email</span>
+            <input type="email" name="yahooEmail" placeholder="you@yahoo.com" value="<%= form.yahooEmail %>" required />
+          </label>
+          <label>
+            <span>Yahoo app password</span>
+            <input type="password" name="appPassword" placeholder="16-character Yahoo app password" required />
+          </label>
+          <button type="submit" class="primary-button">Verify & Connect</button>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Connection status</h2>
+        <% if (status.isConnected) { %>
+          <div class="status-chip active">Connected</div>
+          <p><strong>Yahoo account:</strong> <%= status.maskedEmail %></p>
+          <p><strong>Last verified:</strong> <%= status.lastVerifiedAt ? new Date(status.lastVerifiedAt).toLocaleString() : 'Just now' %></p>
+          <form method="post" action="/setup/disconnect">
+            <button type="submit" class="secondary-button">Disconnect</button>
+          </form>
+        <% } else { %>
+          <div class="status-chip inactive">Not connected</div>
+          <p class="muted">Once your Yahoo app password is verified, Claude can use this mailbox through the connector.</p>
+        <% } %>
+      </div>
+    </section>
+
+    <section class="panel trust-panel">
+      <h2>Why this is safe</h2>
+      <ul>
+        <li>Your normal Yahoo password is never requested.</li>
+        <li>Your Yahoo app password is stored securely on our backend.</li>
+        <li>Claude receives mailbox results only, not your saved Yahoo credentials.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

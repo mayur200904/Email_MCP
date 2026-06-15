@@ -21,6 +21,12 @@ services:
         value: sse
       - key: PUBLIC_BASE_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_ENCRYPTION_KEY
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
       - key: PORT
         fromService:
           type: web
